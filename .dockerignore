@@ -1,0 +1,23 @@
+# Virtual envs / caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# VCS / IDE
+.git/
+.gitignore
+.idea/
+.vscode/
+
+# Secrets & local data (provided at runtime instead)
+.env
+*.db
+*.sqlite3
+
+# Docker
+**/Dockerfile
+**/docker-compose.yml
+.dockerignore

@@ -1,0 +1,39 @@
+# Paths are relative to this file (app/core/infra/). The build context is the
+# repository root so the Dockerfile can access pyproject.toml, uv.lock and app/.
+#
+# Run from anywhere with:
+#   docker compose -f app/core/infra/docker-compose.yml up --build
+name: multi_agent
+
+services:
+  api:
+    build:
+      context: ../../..
+      dockerfile: app/core/infra/Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - path: ../../../.env
+        required: false
+    environment:
+      # Persist the SQLite DB on the mounted volume (absolute path -> 4 slashes).
+      DATABASE_URL: sqlite+aiosqlite:////data/app.db
+      # When using the local Ollama service below, point the app at it:
+      # OLLAMA_BASE_URL: http://ollama:11434
+    volumes:
+      - app-data:/data
+    restart: unless-stopped
+
+  # Optional local LLM. Enable with: docker compose --profile ollama up
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  app-data:
+  ollama-data:
