@@ -1,8 +1,8 @@
 """FastAPI endpoints connecting to the agents.
 
-- POST /agent/chat    -> RouterAgent: route -> sub-agent -> presenter (tone).
-- POST /agent/math    -> MathAgentChain directly (structured output).
-- POST /agent/history -> HistoryAgentChain directly (structured output).
+- POST /agent/chat    -> RouterAgent: route (tool-calling) -> presenter (tone).
+- POST /agent/math    -> MathAgentChain directly (LangGraph, structured output).
+- POST /agent/history -> HistoryAgentChain directly (LangGraph, structured output).
 - POST /agent/present -> PresenterAgentChain directly (style content in a tone).
 """
 from functools import lru_cache
@@ -26,13 +26,13 @@ def get_router_agent() -> RouterAgent:
 
 @lru_cache
 def get_math_agent() -> MathAgentChain:
-    """Cached math agent shared across requests."""
+    """Cached in-process math specialist shared across requests."""
     return MathAgentChain()
 
 
 @lru_cache
 def get_history_agent() -> HistoryAgentChain:
-    """Cached history agent shared across requests."""
+    """Cached in-process history specialist shared across requests."""
     return HistoryAgentChain()
 
 

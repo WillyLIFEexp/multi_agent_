@@ -6,7 +6,6 @@ from app.schema.agent import (
     MathResult,
     PresentedResult,
     PresentRequest,
-    RouteDecision,
 )
 from app.schema.example import ExampleCreate, ExampleRead
 
@@ -17,7 +16,6 @@ __all__ = [
     "AgentResponse",
     "AgentAnswer",
     "PresentRequest",
-    "RouteDecision",
     "MathResult",
     "HistoryResult",
     "PresentedResult",

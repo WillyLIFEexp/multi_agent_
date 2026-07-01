@@ -3,6 +3,9 @@
 #
 # Run from anywhere with:
 #   docker compose -f app/core/infra/docker-compose.yml up --build
+#
+# A single container runs the whole app: the FastAPI gateway, the create_agent
+# router, and the in-process math/history/presenter agents.
 name: multi_agent
 
 services:

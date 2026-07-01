@@ -49,13 +49,6 @@ class PresentedResult(BaseModel):
     )
 
 
-class RouteDecision(BaseModel):
-    """Structured-output target for the router LLM."""
-
-    route: Route = Field(..., description="Which sub-agent should handle the query.")
-    reasoning: str = Field(..., description="Brief justification for the choice.")
-
-
 class AgentResponse(BaseModel):
     """Response returned by the router endpoint."""
 

@@ -1,13 +1,24 @@
-"""Math agent: a tool-using ReAct agent built on LangGraph.
+"""Math agent: a tool-using workflow built as an explicit LangGraph graph.
 
-Lives under ``chain`` because it is stateless (no cross-request memory). It
-binds the math tools to an OpenAI model and lets the model decide which tools
-to call to solve the user's query.
+Lives under ``chain`` because it is stateless (no cross-request memory). Instead
+of a prebuilt ReAct helper, it wires its own ``StateGraph`` so the reason/act
+loop and the final structuring step are visible nodes:
+
+    reason ──(tool calls?)──► act ──► reason
+       │
+       └──(no tool calls)──► respond ──► END
+
+- ``reason``  : the LLM (with math tools bound) decides what to do next.
+- ``act``     : a ``ToolNode`` executes any tool calls the LLM requested.
+- ``respond`` : a final structured-output call distils the conversation into a
+  validated ``MathResult``.
 """
-from typing import Any
+from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import HumanMessage
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.prebuilt import ToolNode
 
 from app.chain.base import BaseChain
 from app.core.settings.config import get_settings
@@ -18,26 +29,78 @@ from app.utility.llm import get_llm
 SYSTEM_PROMPT = (
     "You are a precise math assistant. Use the provided tools to compute, "
     "solve equations, differentiate, integrate, and check numerical facts. "
-    "Prefer tools over doing arithmetic in your head. Show the final answer "
-    "clearly and briefly explain the steps."
+    "Prefer tools over doing arithmetic in your head. When you have enough "
+    "information, stop calling tools and give the final answer."
+)
+
+RESPOND_PROMPT = (
+    "Based on the conversation above, produce the final result. Put the final "
+    "answer in 'answer' and the ordered working in 'steps'."
 )
 
 
+class MathState(TypedDict):
+    """State threaded between the math graph's nodes."""
+
+    messages: Annotated[list[AnyMessage], add_messages]
+    result: MathResult | None
+
+
 class MathAgentChain(BaseChain):
-    """Stateless math agent that solves queries using math tools."""
+    """Stateless math agent that solves queries via an explicit tool-loop graph."""
 
     def __init__(self, model: str | None = None, provider: str | None = None) -> None:
         settings = get_settings()
         self.model = model or settings.default_model
-        llm = get_llm(provider=provider, model=model)
-        # response_format makes the agent emit a structured MathResult alongside
-        # its tool-using reasoning.
-        self._agent = create_react_agent(
-            llm, MATH_TOOLS, prompt=SYSTEM_PROMPT, response_format=MathResult
+        # One model bound to the tools (drives the loop) and one bound to the
+        # structured schema (produces the final MathResult).
+        self._llm_tools = get_llm(provider=provider, model=model).bind_tools(MATH_TOOLS)
+        self._llm_struct = get_llm(
+            provider=provider, model=model
+        ).with_structured_output(MathResult)
+        self._graph = self._build_graph()
+
+    def _build_graph(self):
+        builder = StateGraph(MathState)
+        builder.add_node("reason", self._reason)
+        builder.add_node("act", ToolNode(MATH_TOOLS))
+        builder.add_node("respond", self._respond)
+        builder.add_edge(START, "reason")
+        builder.add_conditional_edges(
+            "reason", self._route, {"act": "act", "respond": "respond"}
         )
+        builder.add_edge("act", "reason")
+        builder.add_edge("respond", END)
+        return builder.compile()
+
+    async def _reason(self, state: MathState) -> dict[str, Any]:
+        """Let the LLM decide the next step (possibly requesting tool calls)."""
+        response = await self._llm_tools.ainvoke(state["messages"])
+        return {"messages": [response]}
+
+    @staticmethod
+    def _route(state: MathState) -> str:
+        """Loop back to tools while the LLM keeps requesting them, else finish."""
+        last = state["messages"][-1]
+        if getattr(last, "tool_calls", None):
+            return "act"
+        return "respond"
+
+    async def _respond(self, state: MathState) -> dict[str, Any]:
+        """Distil the tool-augmented conversation into a structured MathResult."""
+        messages = [*state["messages"], HumanMessage(content=RESPOND_PROMPT)]
+        result: MathResult = await self._llm_struct.ainvoke(messages)
+        return {"result": result}
 
     async def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        messages = [HumanMessage(content=inputs["query"])]
-        state = await self._agent.ainvoke({"messages": messages})
-        result: MathResult = state["structured_response"]
+        state = await self._graph.ainvoke(
+            {
+                "messages": [
+                    SystemMessage(content=SYSTEM_PROMPT),
+                    HumanMessage(content=inputs["query"]),
+                ],
+                "result": None,
+            }
+        )
+        result: MathResult = state["result"]
         return {"result": result, "answer": result.answer}
