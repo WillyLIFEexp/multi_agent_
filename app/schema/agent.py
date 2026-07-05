@@ -38,6 +38,20 @@ class HistoryResult(BaseModel):
     )
 
 
+class KRISelection(BaseModel):
+    """The catalog entry the selector judged most relevant to the query."""
+
+    topic: str = Field(
+        ..., description="Topic of the chosen catalog entry, or 'none' if nothing fits."
+    )
+    file: str = Field(
+        ..., description="Markdown filename of the chosen entry, or 'none'."
+    )
+    reasoning: str = Field(
+        ..., description="Why this entry (or none) best fits the user's request."
+    )
+
+
 class PresentedResult(BaseModel):
     """Structured output of the presenter sub-agent."""
 

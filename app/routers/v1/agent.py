@@ -4,6 +4,7 @@
 - POST /agent/math    -> MathAgentChain directly (LangGraph, structured output).
 - POST /agent/history -> HistoryAgentChain directly (LangGraph, structured output).
 - POST /agent/present -> PresenterAgentChain directly (style content in a tone).
+- POST /agent/kri     -> KRISelectorChain: pick the most relevant catalog entry.
 """
 from functools import lru_cache
 
@@ -11,9 +12,16 @@ from fastapi import APIRouter, Depends
 
 from app.agents.router_agent import RouterAgent
 from app.chain.history_agent import HistoryAgentChain
+from app.chain.kri_selector import KRISelectorChain
 from app.chain.math_agent import MathAgentChain
 from app.chain.presenter_agent import PresenterAgentChain
-from app.schema.agent import AgentAnswer, AgentQuery, AgentResponse, PresentRequest
+from app.schema.agent import (
+    AgentAnswer,
+    AgentQuery,
+    AgentResponse,
+    KRISelection,
+    PresentRequest,
+)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
@@ -40,6 +48,12 @@ def get_history_agent() -> HistoryAgentChain:
 def get_presenter_agent() -> PresenterAgentChain:
     """Cached presenter agent shared across requests."""
     return PresenterAgentChain()
+
+
+@lru_cache
+def get_kri_selector() -> KRISelectorChain:
+    """Cached KRI selector shared across requests."""
+    return KRISelectorChain()
 
 
 @router.post("/chat", response_model=AgentResponse)
@@ -95,3 +109,12 @@ async def present(
     return AgentAnswer(
         agent="presenter", answer=result["answer"], details=result["result"].model_dump()
     )
+
+
+@router.post("/kri", response_model=KRISelection)
+async def kri(
+    payload: AgentQuery, agent: KRISelectorChain = Depends(get_kri_selector)
+) -> KRISelection:
+    """Pick the most relevant data-catalog entry for the query from file headers."""
+    result = await agent.invoke({"query": payload.query})
+    return result["result"]

@@ -3,6 +3,7 @@ from app.schema.agent import (
     AgentQuery,
     AgentResponse,
     HistoryResult,
+    KRISelection,
     MathResult,
     PresentedResult,
     PresentRequest,
@@ -19,4 +20,5 @@ __all__ = [
     "MathResult",
     "HistoryResult",
     "PresentedResult",
+    "KRISelection",
 ]
