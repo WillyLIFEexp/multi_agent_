@@ -11,11 +11,13 @@ into the prompt. The graph is a single node, mirroring the history agent:
     START ──► select ──► END
 """
 from typing import Any, TypedDict
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.chain.base import BaseChain
+from app.database.mongo import get_checkpointer
 from app.schema.agent import KRISelection
 from app.utility.catalog import CatalogEntry, load_catalog
 from app.utility.llm import get_llm
@@ -55,11 +57,14 @@ class KRISelectorChain(BaseChain):
         model: str | None = None,
         provider: str | None = None,
         catalog_dir: str | None = None,
+        checkpointer=None,
     ) -> None:
         self._catalog_dir = catalog_dir
         self._llm = get_llm(
             provider=provider, model=model, temperature=0
         ).with_structured_output(KRISelection)
+        # None when MongoDB is unavailable ⇒ graph runs unpersisted.
+        self._checkpointer = checkpointer or get_checkpointer()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -67,7 +72,7 @@ class KRISelectorChain(BaseChain):
         builder.add_node("select", self._select)
         builder.add_edge(START, "select")
         builder.add_edge("select", END)
-        return builder.compile()
+        return builder.compile(checkpointer=self._checkpointer)
 
     async def _select(self, state: KRISelectorState) -> dict[str, Any]:
         """Ask the LLM to pick the best entry given the query + headers."""
@@ -106,12 +111,14 @@ class KRISelectorChain(BaseChain):
             )
             return {"result": result, "answer": result.reasoning, "candidates": []}
 
+        config = {"configurable": {"thread_id": str(uuid4())}}
         state = await self._graph.ainvoke(
             {
                 "query": inputs["query"],
                 "catalog": _format_catalog(entries),
                 "result": None,
-            }
+            },
+            config,
         )
         result = self._validate(state["result"], entries)
         if result.file == "none":

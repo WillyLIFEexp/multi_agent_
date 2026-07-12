@@ -14,6 +14,7 @@ loop and the final structuring step are visible nodes:
   validated ``MathResult``.
 """
 from typing import Annotated, Any, TypedDict
+from uuid import uuid4
 
 from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
@@ -22,6 +23,7 @@ from langgraph.prebuilt import ToolNode
 
 from app.chain.base import BaseChain
 from app.core.settings.config import get_settings
+from app.database.mongo import get_checkpointer
 from app.schema.agent import MathResult
 from app.tools import MATH_TOOLS
 from app.utility.llm import get_llm
@@ -34,8 +36,14 @@ SYSTEM_PROMPT = (
 )
 
 RESPOND_PROMPT = (
-    "Based on the conversation above, produce the final result. Put the final "
-    "answer in 'answer' and the ordered working in 'steps'."
+    "You are finalizing the math result. The conversation above already contains "
+    "the correct answer, computed by the tools and stated in the assistant's last "
+    "message — do NOT recompute or invent anything.\n"
+    "- 'answer': copy the exact final value verbatim (e.g. the number 3, or an "
+    "expression like 3x^2). It must be a real value, never a variable name, a "
+    "file path, a placeholder, or an empty string.\n"
+    "- 'steps': the ordered working, each step ending in its result, with the "
+    "last step showing the final answer (e.g. '1 + 2 = 3'). Never leave it empty."
 )
 
 
@@ -49,7 +57,12 @@ class MathState(TypedDict):
 class MathAgentChain(BaseChain):
     """Stateless math agent that solves queries via an explicit tool-loop graph."""
 
-    def __init__(self, model: str | None = None, provider: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        provider: str | None = None,
+        checkpointer=None,
+    ) -> None:
         settings = get_settings()
         self.model = model or settings.default_model
         # One model bound to the tools (drives the loop) and one bound to the
@@ -58,6 +71,8 @@ class MathAgentChain(BaseChain):
         self._llm_struct = get_llm(
             provider=provider, model=model
         ).with_structured_output(MathResult)
+        # None when MongoDB is unavailable ⇒ graph runs unpersisted.
+        self._checkpointer = checkpointer or get_checkpointer()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -71,7 +86,7 @@ class MathAgentChain(BaseChain):
         )
         builder.add_edge("act", "reason")
         builder.add_edge("respond", END)
-        return builder.compile()
+        return builder.compile(checkpointer=self._checkpointer)
 
     async def _reason(self, state: MathState) -> dict[str, Any]:
         """Let the LLM decide the next step (possibly requesting tool calls)."""
@@ -90,9 +105,33 @@ class MathAgentChain(BaseChain):
         """Distil the tool-augmented conversation into a structured MathResult."""
         messages = [*state["messages"], HumanMessage(content=RESPOND_PROMPT)]
         result: MathResult = await self._llm_struct.ainvoke(messages)
-        return {"result": result}
+        return {"result": self._repair_answer(result)}
+
+    @staticmethod
+    def _repair_answer(result: MathResult) -> MathResult:
+        """Recover the ``answer`` field when a small model leaves a placeholder there.
+
+        The finalizer reliably fills ``steps`` (e.g. "1 + 2 = 3") but weaker models
+        sometimes drop a placeholder ("path/to/...", "") into ``answer``. When that
+        happens, derive the answer deterministically from the last step's result so
+        the field is never empty or nonsensical.
+        """
+        answer = (result.answer or "").strip()
+        placeholder_markers = ("path/", "/final", "placeholder", "variable", "net_result")
+        looks_bad = (
+            answer in ("", ",", ", ")
+            or any(marker in answer.lower() for marker in placeholder_markers)
+        )
+        if not looks_bad or not result.steps:
+            return result
+        last_step = result.steps[-1]
+        derived = last_step.split("=")[-1].strip() if "=" in last_step else last_step.strip()
+        return result.model_copy(update={"answer": derived}) if derived else result
 
     async def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
+        # Single-shot: a fresh thread_id per call so each run is checkpointed
+        # independently, with no state bleeding between unrelated queries.
+        config = {"configurable": {"thread_id": str(uuid4())}}
         state = await self._graph.ainvoke(
             {
                 "messages": [
@@ -100,7 +139,8 @@ class MathAgentChain(BaseChain):
                     HumanMessage(content=inputs["query"]),
                 ],
                 "result": None,
-            }
+            },
+            config,
         )
         result: MathResult = state["result"]
         return {"result": result, "answer": result.answer}

@@ -12,11 +12,13 @@ agent's shape and is trivial to extend later (e.g. add a retrieval node before
 ``answer`` without touching callers).
 """
 from typing import Any, TypedDict
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.chain.base import BaseChain
+from app.database.mongo import get_checkpointer
 from app.schema.agent import HistoryResult
 from app.utility.llm import get_llm
 
@@ -38,10 +40,17 @@ class HistoryState(TypedDict):
 class HistoryAgentChain(BaseChain):
     """Stateless history tutor backed purely by the LLM, as a LangGraph graph."""
 
-    def __init__(self, model: str | None = None, provider: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        provider: str | None = None,
+        checkpointer=None,
+    ) -> None:
         self._llm = get_llm(provider=provider, model=model).with_structured_output(
             HistoryResult
         )
+        # None when MongoDB is unavailable ⇒ graph runs unpersisted.
+        self._checkpointer = checkpointer or get_checkpointer()
         self._graph = self._build_graph()
 
     def _build_graph(self):
@@ -49,7 +58,7 @@ class HistoryAgentChain(BaseChain):
         builder.add_node("answer", self._answer)
         builder.add_edge(START, "answer")
         builder.add_edge("answer", END)
-        return builder.compile()
+        return builder.compile(checkpointer=self._checkpointer)
 
     async def _answer(self, state: HistoryState) -> dict[str, Any]:
         """Produce the structured HistoryResult for the query."""
@@ -61,6 +70,10 @@ class HistoryAgentChain(BaseChain):
         return {"result": result}
 
     async def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        state = await self._graph.ainvoke({"query": inputs["query"], "result": None})
+        # Single-shot: a fresh thread_id per call keeps runs independently checkpointed.
+        config = {"configurable": {"thread_id": str(uuid4())}}
+        state = await self._graph.ainvoke(
+            {"query": inputs["query"], "result": None}, config
+        )
         result: HistoryResult = state["result"]
         return {"result": result, "answer": result.answer}

@@ -27,7 +27,12 @@ from app.chain.history_agent import HistoryAgentChain
 from app.chain.math_agent import MathAgentChain
 from app.chain.presenter_agent import PresenterAgentChain
 from app.core.settings.config import get_settings
-from app.utility.history import ChatHistoryStore
+from app.database.mongo import get_checkpointer, get_history_collection
+from app.utility.history import (
+    ChatHistoryStore,
+    MongoChatHistoryStore,
+    maybe_await,
+)
 from app.utility.llm import get_llm
 
 ROUTER_SYSTEM_PROMPT = (
@@ -52,7 +57,7 @@ class RouterAgent(BaseAgent):
         self,
         model: str | None = None,
         provider: str | None = None,
-        history_store: ChatHistoryStore | None = None,
+        history_store=None,
     ) -> None:
         settings = get_settings()
         super().__init__(model=model or settings.default_model)
@@ -62,13 +67,26 @@ class RouterAgent(BaseAgent):
         self._history = HistoryAgentChain(model=model, provider=provider)
         self._presenter = PresenterAgentChain(model=model, provider=provider)
 
+        # None when MongoDB is unavailable ⇒ the agent runs without a checkpoint,
+        # and cross-turn context is spliced from the memory store instead (below).
+        self._checkpointer = get_checkpointer()
         self._agent = create_agent(
             get_llm(provider=provider, model=model, temperature=0),
             tools=self._build_tools(),
             system_prompt=ROUTER_SYSTEM_PROMPT,
+            checkpointer=self._checkpointer,
         )
-        # The router carries conversation memory so it can route follow-ups.
-        self.history = history_store or ChatHistoryStore()
+        # Durable transcript for routing/fallback context and the /sessions API.
+        # Falls back to the in-memory store when MongoDB is unavailable.
+        if history_store is not None:
+            self.history = history_store
+        else:
+            collection = get_history_collection()
+            self.history = (
+                MongoChatHistoryStore(collection)
+                if collection is not None
+                else ChatHistoryStore()
+            )
 
     def _build_tools(self) -> list:
         """Wrap the specialist chains as tools the router agent can call.
@@ -120,10 +138,17 @@ class RouterAgent(BaseAgent):
         restyles that structured result; otherwise the presenter answers the
         query directly (fallback), which may ask for more information.
         """
-        history = self.history.get(session_id)
-        state = await self._agent.ainvoke(
-            {"messages": [*history, HumanMessage(content=query)]}
-        )
+        history = await maybe_await(self.history.get(session_id))
+
+        # With a checkpointer, the thread already holds prior turns, so pass only
+        # the new message. Without one (no Mongo), splice history from the store
+        # so follow-ups still route with context.
+        if self._checkpointer is not None:
+            input_messages = [HumanMessage(content=query)]
+        else:
+            input_messages = [*history, HumanMessage(content=query)]
+        config = {"configurable": {"thread_id": session_id}}
+        state = await self._agent.ainvoke({"messages": input_messages}, config)
         messages = state["messages"]
         route, details, reasoning = self._inspect(messages)
 
@@ -146,8 +171,8 @@ class RouterAgent(BaseAgent):
                 "details": details or {},
             }
 
-        self.history.add_user(session_id, query)
-        self.history.add_ai(session_id, result["answer"])
+        await maybe_await(self.history.add_user(session_id, query))
+        await maybe_await(self.history.add_ai(session_id, result["answer"]))
         return result
 
     @staticmethod
