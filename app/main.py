@@ -5,6 +5,7 @@ from fastapi import FastAPI
 
 from app.core.infra.logging import configure_logging, get_logger
 from app.core.settings.config import get_settings
+from app.database.mongo import close_mongo, init_mongo
 from app.database.session import init_db
 from app.routers.v1 import api_router as api_router_v1
 
@@ -18,7 +19,9 @@ async def lifespan(app: FastAPI):
     """Startup and shutdown hooks."""
     logger.info("Starting %s (env=%s)", settings.app_name, settings.environment)
     await init_db()
+    await init_mongo()
     yield
+    await close_mongo()
     logger.info("Shutting down %s", settings.app_name)
 
 

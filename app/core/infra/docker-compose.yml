@@ -21,10 +21,23 @@ services:
     environment:
       # Persist the SQLite DB on the mounted volume (absolute path -> 4 slashes).
       DATABASE_URL: sqlite+aiosqlite:////data/app.db
+      # Persistent chat memory + LangGraph checkpoints live in the mongo service.
+      MONGODB_URL: mongodb://mongo:27017
       # When using the local Ollama service below, point the app at it:
       # OLLAMA_BASE_URL: http://ollama:11434
+    depends_on:
+      - mongo
     volumes:
       - app-data:/data
+    restart: unless-stopped
+
+  # MongoDB: persistent chat-history store and LangGraph checkpointer backend.
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
     restart: unless-stopped
 
   # Optional local LLM. Enable with: docker compose --profile ollama up
@@ -39,4 +52,5 @@ services:
 
 volumes:
   app-data:
+  mongo-data:
   ollama-data:

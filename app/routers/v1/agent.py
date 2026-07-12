@@ -15,6 +15,8 @@ from app.chain.history_agent import HistoryAgentChain
 from app.chain.kri_selector import KRISelectorChain
 from app.chain.math_agent import MathAgentChain
 from app.chain.presenter_agent import PresenterAgentChain
+from app.database.mongo import get_checkpointer
+from app.utility.history import maybe_await
 from app.schema.agent import (
     AgentAnswer,
     AgentQuery,
@@ -74,8 +76,11 @@ async def chat(
 async def clear_session(
     session_id: str, agent: RouterAgent = Depends(get_router_agent)
 ) -> None:
-    """Clear the chat history for a session."""
-    agent.history.clear(session_id)
+    """Clear a session: both the memory-store transcript and its checkpoint thread."""
+    await maybe_await(agent.history.clear(session_id))
+    checkpointer = get_checkpointer()
+    if checkpointer is not None:
+        await checkpointer.adelete_thread(session_id)
 
 
 @router.post("/math", response_model=AgentAnswer)

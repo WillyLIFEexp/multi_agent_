@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     # Database
     database_url: str = Field(default="sqlite+aiosqlite:///./app.db")
 
+    # MongoDB (persistent chat memory + LangGraph checkpointer)
+    mongodb_url: str = Field(default="mongodb://localhost:27017")
+    mongodb_db_name: str = Field(default="multi_agent")
+    mongodb_history_collection: str = Field(default="chat_history")
+    # Optional TTL (seconds) for checkpoint documents; None keeps them forever.
+    mongodb_checkpoint_ttl: int | None = Field(default=None)
+
     # LLM / agents
     llm_provider: str = Field(default="openai")  # openai | azure | ollama
     default_model: str = Field(default="gpt-4o-mini")

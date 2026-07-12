@@ -11,12 +11,23 @@ dependencies = [
     "pydantic-settings>=2.5",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
-    "langgraph>=0.2",
-    "langchain>=0.3",
-    "langchain-openai>=0.2",
+    "langgraph==1.2.7",
+    "langchain==1.3.11",
+    "langchain-classic==1.0.8",
+    "langchain-community==0.4.2",
+    "langchain-openai==1.3.3",
+    "langchain-ollama==1.1.0",
     "openai>=1.50",
     "sympy>=1.14.0",
-    "langchain-ollama>=1.1.0",
+    # MongoDB: persistent memory store + LangGraph checkpointer.
+    "langgraph-checkpoint-mongodb>=0.1",
+    "pymongo>=4.9",
+    # Extras from the requested pin set.
+    "gradio==5.49.1",
+    "matplotlib>=3.9.2",
+    "httpx>=0.28.1",
+    "jmespath>=1.0.1",
+    "jsonschema>=4.25.1",
 ]
 
 [build-system]
