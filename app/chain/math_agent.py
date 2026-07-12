@@ -16,7 +16,13 @@ loop and the final structuring step are visible nodes:
 from typing import Annotated, Any, TypedDict
 from uuid import uuid4
 
-from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
@@ -105,28 +111,44 @@ class MathAgentChain(BaseChain):
         """Distil the tool-augmented conversation into a structured MathResult."""
         messages = [*state["messages"], HumanMessage(content=RESPOND_PROMPT)]
         result: MathResult = await self._llm_struct.ainvoke(messages)
-        return {"result": self._repair_answer(result)}
+        return {"result": self._repair(result, state["messages"])}
 
     @staticmethod
-    def _repair_answer(result: MathResult) -> MathResult:
-        """Recover the ``answer`` field when a small model leaves a placeholder there.
+    def _repair(result: MathResult, messages: list[AnyMessage]) -> MathResult:
+        """Backstop the finalizer with the conversation's ground truth.
 
-        The finalizer reliably fills ``steps`` (e.g. "1 + 2 = 3") but weaker models
-        sometimes drop a placeholder ("path/to/...", "") into ``answer``. When that
-        happens, derive the answer deterministically from the last step's result so
-        the field is never empty or nonsensical.
+        Weak models sometimes return an empty or placeholder ``MathResult`` even
+        though the tools already computed the answer. Rebuild ``steps`` from the
+        tool calls and their results, and ``answer`` from the last step (or the
+        model's final text), so a completed calculation is never dropped.
         """
+        # Pair each tool call's expression with its result → "expr = result" steps.
+        call_args: dict[str, str] = {}
+        tool_steps: list[str] = []
+        final_text = ""
+        for msg in messages:
+            if isinstance(msg, AIMessage) and msg.tool_calls:
+                for call in msg.tool_calls:
+                    arg = next(iter((call.get("args") or {}).values()), "")
+                    call_args[call.get("id", "")] = str(arg)
+            elif isinstance(msg, ToolMessage):
+                expr = call_args.get(msg.tool_call_id, "")
+                content = str(msg.content).strip()
+                tool_steps.append(f"{expr} = {content}".strip(" ="))
+            elif isinstance(msg, AIMessage) and isinstance(msg.content, str) and msg.content.strip():
+                final_text = msg.content.strip()
+
+        steps = result.steps or tool_steps
+
         answer = (result.answer or "").strip()
         placeholder_markers = ("path/", "/final", "placeholder", "variable", "net_result")
-        looks_bad = (
-            answer in ("", ",", ", ")
-            or any(marker in answer.lower() for marker in placeholder_markers)
-        )
-        if not looks_bad or not result.steps:
-            return result
-        last_step = result.steps[-1]
-        derived = last_step.split("=")[-1].strip() if "=" in last_step else last_step.strip()
-        return result.model_copy(update={"answer": derived}) if derived else result
+        if answer in ("", ",", ", ") or any(m in answer.lower() for m in placeholder_markers):
+            if steps and "=" in steps[-1]:
+                answer = steps[-1].split("=")[-1].strip()
+            elif final_text:
+                answer = final_text
+
+        return result.model_copy(update={"answer": answer, "steps": steps})
 
     async def invoke(self, inputs: dict[str, Any]) -> dict[str, Any]:
         # Single-shot: a fresh thread_id per call so each run is checkpointed

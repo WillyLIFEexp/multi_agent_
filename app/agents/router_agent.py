@@ -177,22 +177,26 @@ class RouterAgent(BaseAgent):
 
     @staticmethod
     def _inspect(messages: list) -> tuple[str | None, dict | None, str]:
-        """Recover (route, structured details, reasoning) from the agent's messages.
+        """Recover (route, structured details, reasoning) for the CURRENT turn.
 
-        Scans for the assistant's tool call (route + any accompanying reasoning)
-        and the tool's returned JSON payload (details).
+        Scans newest-first and takes the most recent tool call (route + reasoning)
+        and the most recent tool result (details). This matters because the router
+        is checkpointed: ``messages`` accumulates every prior turn, so scanning
+        oldest-first would return a stale earlier turn's tool result.
         """
         route: str | None = None
         details: dict | None = None
         reasoning = ""
-        for msg in messages:
-            if isinstance(msg, AIMessage) and msg.tool_calls:
-                route = _TOOL_ROUTES.get(msg.tool_calls[0]["name"], route)
-                if isinstance(msg.content, str) and msg.content.strip():
-                    reasoning = msg.content.strip()
-            elif isinstance(msg, ToolMessage) and details is None:
+        for msg in reversed(messages):
+            if details is None and isinstance(msg, ToolMessage):
                 try:
                     details = json.loads(msg.content)
                 except (json.JSONDecodeError, TypeError):
                     details = None
+            elif route is None and isinstance(msg, AIMessage) and msg.tool_calls:
+                route = _TOOL_ROUTES.get(msg.tool_calls[0]["name"], route)
+                if isinstance(msg.content, str) and msg.content.strip():
+                    reasoning = msg.content.strip()
+            if route is not None and details is not None:
+                break
         return route, details, reasoning
