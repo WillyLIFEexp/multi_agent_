@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     mongodb_history_collection: str = Field(default="chat_history")
     # Optional TTL (seconds) for checkpoint documents; None keeps them forever.
     mongodb_checkpoint_ttl: int | None = Field(default=None)
+    # Per-process connection-pool cap. Total load on Mongo = replicas x this, so
+    # keep (swarm replicas x max_pool_size) under the server's connection limit.
+    mongodb_max_pool_size: int = Field(default=100)
 
     # LLM / agents
     llm_provider: str = Field(default="openai")  # openai | azure | ollama

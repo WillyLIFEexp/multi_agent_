@@ -6,6 +6,9 @@
 #
 # A single container runs the whole app: the FastAPI gateway, the create_agent
 # router, and the in-process math/history/presenter agents.
+#
+# For multi-replica Docker Swarm (3 stateless API replicas sharing one Mongo),
+# use docker-stack.yml in this directory instead.
 name: multi_agent
 
 services:

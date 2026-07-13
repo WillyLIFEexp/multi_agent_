@@ -39,7 +39,9 @@ async def init_mongo() -> None:
     global _async_client, _sync_client, _checkpointer
 
     async_client = AsyncMongoClient(
-        settings.mongodb_url, serverSelectionTimeoutMS=_SERVER_SELECT_TIMEOUT_MS
+        settings.mongodb_url,
+        serverSelectionTimeoutMS=_SERVER_SELECT_TIMEOUT_MS,
+        maxPoolSize=settings.mongodb_max_pool_size,
     )
     try:
         await async_client.admin.command("ping")
@@ -54,7 +56,9 @@ async def init_mongo() -> None:
 
     _async_client = async_client
     _sync_client = MongoClient(
-        settings.mongodb_url, serverSelectionTimeoutMS=_SERVER_SELECT_TIMEOUT_MS
+        settings.mongodb_url,
+        serverSelectionTimeoutMS=_SERVER_SELECT_TIMEOUT_MS,
+        maxPoolSize=settings.mongodb_max_pool_size,
     )
     _checkpointer = MongoDBSaver(
         _sync_client,

@@ -1,0 +1,57 @@
+# Docker Swarm stack: 3 stateless API replicas sharing ONE MongoDB.
+#
+# All memory (chat_history) and LangGraph checkpoints live in the single mongo
+# service, keyed by session_id / thread_id, so any replica can serve any turn —
+# the app tier is stateless and horizontally scalable.
+#
+# Deploy (Swarm ignores `build:`, so build & push the image first):
+#   docker build -t multi_agent:latest -f app/core/infra/Dockerfile .
+#   docker stack deploy -c app/core/infra/docker-stack.yml multi_agent
+#
+# Notes:
+#   - Each replica runs its own FastAPI lifespan (init_mongo) and its own pymongo
+#     connection pool. Total connections into Mongo = replicas x mongodb_max_pool_size.
+#   - `depends_on` is ignored by Swarm; init_mongo() degrades gracefully and the
+#     app retries connecting lazily, so start order does not matter.
+name: multi_agent
+
+services:
+  api:
+    image: multi_agent:latest
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: sqlite+aiosqlite:////data/app.db
+      # Swarm DNS resolves `mongo` to the mongo service VIP — every replica hits
+      # the same database regardless of which node it runs on.
+      MONGODB_URL: mongodb://mongo:27017
+    volumes:
+      - app-data:/data
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+      update_config:
+        parallelism: 1          # rolling update one replica at a time
+        order: start-first      # zero-downtime: new task healthy before old stops
+
+  # Single MongoDB instance shared by all api replicas. Do NOT set replicas: 3
+  # here — that would be 3 independent mongods with separate volumes (split data).
+  # For HA, replace this with a proper 3-node replica set and a replicaSet URI.
+  mongo:
+    image: mongo:7
+    volumes:
+      - mongo-data:/data/db
+    deploy:
+      replicas: 1
+      placement:
+        # A local volume is node-local; pin mongo so its data follows it across
+        # restarts. Swap the constraint for your DB node, or use shared storage.
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
+
+volumes:
+  app-data:
+  mongo-data:
